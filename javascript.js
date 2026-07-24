@@ -1,7 +1,39 @@
 /* ============================================================
    RAMY MOTORS — Sistema de Gestión
-   Almacenamiento: localStorage (sin servidor / sin base de datos)
+   Almacenamiento: Firebase Firestore (datos sincronizados en
+   tiempo real entre todos los dispositivos)
    ============================================================ */
+
+import { initializeApp } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-app.js";
+import { getAnalytics } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-analytics.js";
+import {
+    getFirestore,
+    collection,
+    doc,
+    setDoc,
+    deleteDoc,
+    onSnapshot,
+    runTransaction,
+    writeBatch
+} from "https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js";
+
+const firebaseConfig = {
+    apiKey: "AIzaSyDCdxa4fVIJepqmwOsNBtdK43KiGIok-ps",
+    authDomain: "sistemainventario-7b450.firebaseapp.com",
+    projectId: "sistemainventario-7b450",
+    storageBucket: "sistemainventario-7b450.firebasestorage.app",
+    messagingSenderId: "821935872729",
+    appId: "1:821935872729:web:27f77d81b9afc1846bbcc8",
+    measurementId: "G-51K8FH9JHZ"
+};
+
+const firebaseApp = initializeApp(firebaseConfig);
+const analytics = getAnalytics(firebaseApp);
+const db = getFirestore(firebaseApp);
+
+const refProductos = collection(db, "productos");
+const refVentas = collection(db, "ventas");
+const refContador = doc(db, "meta", "contadorVentas");
 
 const EMPRESA = {
     nombre: "RAMY MOTORS",
@@ -12,12 +44,6 @@ const EMPRESA = {
 
 const STOCK_BAJO_LIMITE = 5;
 
-const LS_KEYS = {
-    productos: "rm_productos",
-    ventas: "rm_ventas",
-    ventaNum: "rm_venta_num"
-};
-
 /* ================= ESTADO ================= */
 let productos = [];
 let ventas = [];
@@ -26,23 +52,42 @@ let carrito = []; // [{codigo, nombre, marca, precio, cantidad, subtotal}]
 let productoSeleccionadoVenta = null;
 let ultimaVentaGenerada = null;
 
-/* ================= PERSISTENCIA ================= */
-function cargarDatos() {
-    productos = JSON.parse(localStorage.getItem(LS_KEYS.productos) || "[]");
-    ventas = JSON.parse(localStorage.getItem(LS_KEYS.ventas) || "[]");
-    siguienteNumeroVenta = parseInt(localStorage.getItem(LS_KEYS.ventaNum) || "1", 10);
+/* ================= SINCRONIZACIÓN CON FIRESTORE =================
+   Reemplaza el antiguo localStorage. "productos" y "ventas" se
+   mantienen actualizados en tiempo real: si otro dispositivo
+   agrega o edita algo, esta pantalla se refresca sola. */
+function iniciarSincronizacion() {
+    onSnapshot(refProductos, (snapshot) => {
+        productos = snapshot.docs.map(d => d.data());
+        renderVistaActual();
+    }, (error) => {
+        console.error("Error al sincronizar productos:", error);
+        toast("Sin conexión con la base de datos");
+    });
+
+    onSnapshot(refVentas, (snapshot) => {
+        ventas = snapshot.docs.map(d => d.data()).sort((a, b) => a.numero - b.numero);
+        renderVistaActual();
+    }, (error) => {
+        console.error("Error al sincronizar ventas:", error);
+        toast("Sin conexión con la base de datos");
+    });
+
+    onSnapshot(refContador, (snap) => {
+        siguienteNumeroVenta = snap.exists() ? snap.data().siguiente : 1;
+        actualizarNumeroVentaLabel();
+    }, (error) => {
+        console.error("Error al sincronizar contador de ventas:", error);
+    });
 }
 
-function guardarProductos() {
-    localStorage.setItem(LS_KEYS.productos, JSON.stringify(productos));
-}
-
-function guardarVentas() {
-    localStorage.setItem(LS_KEYS.ventas, JSON.stringify(ventas));
-}
-
-function guardarNumeroVenta() {
-    localStorage.setItem(LS_KEYS.ventaNum, String(siguienteNumeroVenta));
+function renderVistaActual() {
+    const vistaActiva = document.querySelector(".view.active");
+    if (!vistaActiva) return;
+    const nombre = vistaActiva.id.replace("view-", "");
+    if (nombre === "inicio") renderInicio();
+    if (nombre === "inventario") renderInventario();
+    if (nombre === "historial") renderHistorial();
 }
 
 /* ================= UTILIDADES ================= */
@@ -112,33 +157,49 @@ function buscarPorCodigo(codigo) {
     return productos.find(p => p.codigo.toLowerCase() === codigo.toLowerCase());
 }
 
-function agregarOEditarProducto(datos, codigoOriginal) {
-    if (codigoOriginal) {
-        // edición
-        const idx = productos.findIndex(p => p.codigo.toLowerCase() === codigoOriginal.toLowerCase());
-        if (idx === -1) return { ok: false, msg: "Producto no encontrado." };
+async function agregarOEditarProducto(datos, codigoOriginal) {
+    try {
+        if (codigoOriginal) {
+            // edición
+            const existente = buscarPorCodigo(codigoOriginal);
+            if (!existente) return { ok: false, msg: "Producto no encontrado." };
 
-        // si cambiaron el código, verificar que el nuevo no exista ya (en otro producto)
-        if (datos.codigo.toLowerCase() !== codigoOriginal.toLowerCase() && buscarPorCodigo(datos.codigo)) {
-            return { ok: false, msg: "Ya existe un producto con ese código." };
+            // si cambiaron el código, verificar que el nuevo no exista ya (en otro producto)
+            if (datos.codigo.toLowerCase() !== codigoOriginal.toLowerCase() && buscarPorCodigo(datos.codigo)) {
+                return { ok: false, msg: "Ya existe un producto con ese código." };
+            }
+
+            if (datos.codigo.toLowerCase() !== codigoOriginal.toLowerCase()) {
+                // el código cambió: crear el documento nuevo y borrar el anterior, de forma atómica
+                const lote = writeBatch(db);
+                lote.set(doc(refProductos, datos.codigo), datos);
+                lote.delete(doc(refProductos, codigoOriginal));
+                await lote.commit();
+            } else {
+                await setDoc(doc(refProductos, datos.codigo), datos);
+            }
+        } else {
+            if (buscarPorCodigo(datos.codigo)) {
+                return { ok: false, msg: "Ya existe un producto con ese código." };
+            }
+            await setDoc(doc(refProductos, datos.codigo), datos);
         }
-        productos[idx] = datos;
-    } else {
-        if (buscarPorCodigo(datos.codigo)) {
-            return { ok: false, msg: "Ya existe un producto con ese código." };
-        }
-        productos.push(datos);
+        return { ok: true };
+    } catch (error) {
+        console.error(error);
+        return { ok: false, msg: "No se pudo guardar el producto. Revisa tu conexión." };
     }
-    guardarProductos();
-    return { ok: true };
 }
 
-function eliminarProducto(codigo) {
-    const idx = productos.findIndex(p => p.codigo.toLowerCase() === codigo.toLowerCase());
-    if (idx === -1) return false;
-    productos.splice(idx, 1);
-    guardarProductos();
-    return true;
+async function eliminarProducto(codigo) {
+    try {
+        await deleteDoc(doc(refProductos, codigo));
+        return true;
+    } catch (error) {
+        console.error(error);
+        toast("No se pudo eliminar el producto");
+        return false;
+    }
 }
 
 /* ---- búsqueda general (código / nombre / marca) ---- */
@@ -152,16 +213,37 @@ function buscarGeneral(texto) {
     );
 }
 
-/* ---- búsqueda por motor / compatibilidad ----
+/* ---- referencia cruzada de motores ----
    El campo "compatibilidad" guarda motores separados por coma.
-   Se busca el motor ingresado y se listan los productos donde aparece. */
-function buscarPorMotor(texto) {
+   Dado el nombre de un motor, se buscan los productos que lo
+   incluyen y se listan los DEMÁS motores que aparecen en esos
+   mismos productos: es decir, qué motores pueden reemplazarlo
+   (usan la misma pieza). */
+function obtenerMotoresProducto(p) {
+    return (p.compatibilidad || "").split(",").map(m => m.trim()).filter(Boolean);
+}
+
+function buscarMotoresRelacionados(texto) {
     const q = texto.trim().toLowerCase();
     if (!q) return [];
-    return productos.filter(p => {
-        const motores = (p.compatibilidad || "").split(",").map(m => m.trim().toLowerCase());
-        return motores.some(m => m.includes(q));
+
+    const productosCoincidentes = productos.filter(p =>
+        obtenerMotoresProducto(p).some(m => m.toLowerCase().includes(q))
+    );
+
+    const mapa = new Map(); // motor relacionado -> productos que lo comparten
+
+    productosCoincidentes.forEach(p => {
+        obtenerMotoresProducto(p).forEach(motor => {
+            if (motor.toLowerCase().includes(q)) return; // omite el motor buscado
+            if (!mapa.has(motor)) mapa.set(motor, []);
+            mapa.get(motor).push(p);
+        });
     });
+
+    return [...mapa.entries()]
+        .map(([motor, prods]) => ({ motor, productos: prods }))
+        .sort((a, b) => a.motor.localeCompare(b.motor));
 }
 
 /* ================= RENDER: INVENTARIO ================= */
@@ -182,20 +264,14 @@ document.getElementById("inputBuscarGeneral").addEventListener("input", renderIn
 document.getElementById("inputBuscarMotor").addEventListener("input", renderInventario);
 
 function renderInventario() {
-    const cont = document.getElementById("listaInventario");
-    let lista;
-
     if (modoBusqueda === "motor") {
-        const q = document.getElementById("inputBuscarMotor").value;
-        lista = q.trim() ? buscarPorMotor(q) : [];
-        if (!q.trim()) {
-            cont.innerHTML = `<p class="empty-msg">Escribe el nombre de un motor para ver los productos compatibles.</p>`;
-            return;
-        }
-    } else {
-        const q = document.getElementById("inputBuscarGeneral").value;
-        lista = buscarGeneral(q);
+        renderResultadosMotor(document.getElementById("inputBuscarMotor").value);
+        return;
     }
+
+    const cont = document.getElementById("listaInventario");
+    const q = document.getElementById("inputBuscarGeneral").value;
+    const lista = buscarGeneral(q);
 
     if (lista.length === 0) {
         cont.innerHTML = `<p class="empty-msg">No se encontraron productos.</p>`;
@@ -212,16 +288,53 @@ function renderInventario() {
         const btnEdit = card.querySelector(".btn-editar");
         const btnDel = card.querySelector(".btn-eliminar");
         if (btnEdit) btnEdit.addEventListener("click", (e) => { e.stopPropagation(); abrirFormularioEdicion(codigo); });
-        if (btnDel) btnDel.addEventListener("click", (e) => {
+        if (btnDel) btnDel.addEventListener("click", async (e) => {
             e.stopPropagation();
             if (confirm(`¿Eliminar el producto "${codigo}"? Esta acción no se puede deshacer.`)) {
-                eliminarProducto(codigo);
-                toast("Producto eliminado");
-                renderInventario();
-                renderInicio();
+                const ok = await eliminarProducto(codigo);
+                if (ok) toast("Producto eliminado");
             }
         });
     });
+}
+
+function renderResultadosMotor(texto) {
+    const cont = document.getElementById("listaInventario");
+
+    if (!texto.trim()) {
+        cont.innerHTML = `<p class="empty-msg">Escribe el nombre de un motor para ver qué otros motores pueden reemplazarlo.</p>`;
+        return;
+    }
+
+    const relacionados = buscarMotoresRelacionados(texto);
+
+    if (relacionados.length === 0) {
+        cont.innerHTML = `<p class="empty-msg">No se encontraron motores compatibles.</p>`;
+        return;
+    }
+
+    cont.innerHTML = relacionados.map(r => tarjetaMotor(r)).join("");
+
+    cont.querySelectorAll(".product-card").forEach(card => {
+        card.querySelector(".product-card-top").addEventListener("click", () => {
+            card.querySelector(".product-details").classList.toggle("open");
+        });
+    });
+}
+
+function tarjetaMotor(r) {
+    return `
+  <div class="product-card">
+    <div class="product-card-top">
+      <div>
+        <div class="product-name">${escapeHtml(r.motor)}</div>
+        <div class="product-meta">${r.productos.length} producto(s) en común</div>
+      </div>
+    </div>
+    <div class="product-details">
+      ${r.productos.map(p => `<p><b>${escapeHtml(p.nombre)}</b> — ${escapeHtml(p.codigo)}</p>`).join("")}
+    </div>
+  </div>`;
 }
 
 function tarjetaProducto(p) {
@@ -280,7 +393,7 @@ function abrirFormularioEdicion(codigo) {
     abrirModal("modalProducto");
 }
 
-document.getElementById("formProducto").addEventListener("submit", (e) => {
+document.getElementById("formProducto").addEventListener("submit", async (e) => {
     e.preventDefault();
 
     const datos = {
@@ -301,7 +414,12 @@ document.getElementById("formProducto").addEventListener("submit", (e) => {
     }
 
     const codigoOriginal = document.getElementById("fCodigoOriginal").value;
-    const resultado = agregarOEditarProducto(datos, codigoOriginal || null);
+    const btnGuardar = document.querySelector("#formProducto button[type=submit]");
+    btnGuardar.disabled = true;
+
+    const resultado = await agregarOEditarProducto(datos, codigoOriginal || null);
+
+    btnGuardar.disabled = false;
 
     if (!resultado.ok) {
         toast(resultado.msg);
@@ -310,8 +428,6 @@ document.getElementById("formProducto").addEventListener("submit", (e) => {
 
     cerrarModal("modalProducto");
     toast(codigoOriginal ? "Producto actualizado" : "Producto agregado");
-    renderInventario();
-    renderInicio();
 });
 
 /* ================= VENTAS ================= */
@@ -445,47 +561,67 @@ document.getElementById("btnConfirmarAgregar").addEventListener("click", () => {
     toast("Producto agregado al carrito");
 });
 
-/* ---- confirmar venta ---- */
-document.getElementById("btnConfirmarVenta").addEventListener("click", () => {
+/* ---- confirmar venta ----
+   Se ejecuta como una transacción de Firestore: lee el contador y el
+   stock, valida, y recién entonces escribe. Así, si dos dispositivos
+   confirman una venta al mismo tiempo, nunca se pisan ni repiten
+   número de venta. */
+async function confirmarVentaEnFirestore(itemsCarrito) {
+    return await runTransaction(db, async (transaction) => {
+        const refsProductosCarrito = itemsCarrito.map(i => doc(refProductos, i.codigo));
+
+        const contadorSnap = await transaction.get(refContador);
+        const snapsProductos = await Promise.all(refsProductosCarrito.map(r => transaction.get(r)));
+
+        for (let idx = 0; idx < itemsCarrito.length; idx++) {
+            const snap = snapsProductos[idx];
+            const item = itemsCarrito[idx];
+            if (!snap.exists() || snap.data().cantidad < item.cantidad) {
+                throw new Error(`Stock insuficiente para ${item.nombre}`);
+            }
+        }
+
+        const numero = contadorSnap.exists() ? contadorSnap.data().siguiente : 1;
+        const venta = {
+            numero,
+            fecha: new Date().toISOString(),
+            detalles: itemsCarrito.map(i => ({ ...i })),
+            total: itemsCarrito.reduce((acc, i) => acc + i.subtotal, 0)
+        };
+
+        snapsProductos.forEach((snap, idx) => {
+            const item = itemsCarrito[idx];
+            transaction.update(refsProductosCarrito[idx], { cantidad: snap.data().cantidad - item.cantidad });
+        });
+
+        transaction.set(doc(refVentas, String(numero)), venta);
+        transaction.set(refContador, { siguiente: numero + 1 });
+
+        return venta;
+    });
+}
+
+document.getElementById("btnConfirmarVenta").addEventListener("click", async () => {
     if (carrito.length === 0) {
         toast("No hay productos en la venta");
         return;
     }
 
-    // validar y descontar stock
-    for (const item of carrito) {
-        const p = buscarPorCodigo(item.codigo);
-        if (!p || p.cantidad < item.cantidad) {
-            toast(`Stock insuficiente para ${item.nombre}`);
-            return;
-        }
+    const btn = document.getElementById("btnConfirmarVenta");
+    btn.disabled = true;
+
+    try {
+        const venta = await confirmarVentaEnFirestore(carrito);
+        ultimaVentaGenerada = venta;
+        mostrarFactura(venta);
+        carrito = [];
+        renderVentaActual();
+    } catch (error) {
+        console.error(error);
+        toast(error.message || "No se pudo registrar la venta");
+    } finally {
+        btn.disabled = false;
     }
-    carrito.forEach(item => {
-        const p = buscarPorCodigo(item.codigo);
-        p.cantidad -= item.cantidad;
-    });
-    guardarProductos();
-
-    const total = carrito.reduce((acc, i) => acc + i.subtotal, 0);
-    const venta = {
-        numero: siguienteNumeroVenta,
-        fecha: new Date().toISOString(),
-        detalles: carrito.map(i => ({ ...i })),
-        total: total
-    };
-
-    ventas.push(venta);
-    guardarVentas();
-
-    siguienteNumeroVenta += 1;
-    guardarNumeroVenta();
-
-    ultimaVentaGenerada = venta;
-    mostrarFactura(venta);
-
-    carrito = [];
-    renderVentaActual();
-    renderInicio();
 });
 
 /* ================= FACTURA ================= */
@@ -692,8 +828,51 @@ function renderInicio() {
     }
 }
 
+/* ================= LOGIN =================
+   La contraseña no se guarda en texto plano en el código: se
+   compara el hash SHA-256 de lo que la persona escribe contra
+   este hash guardado. */
+const CLAVE_HASH = "06bab52133ca9d8d527cdcd73b191c418653413d0d1ca0c95c6b381690872d14";
+const AUTH_KEY = "rm_auth_ok";
+
+async function sha256Hex(texto) {
+    const datos = new TextEncoder().encode(texto);
+    const hashBuffer = await crypto.subtle.digest("SHA-256", datos);
+    return Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+function ocultarLogin() {
+    document.getElementById("loginOverlay").classList.add("hidden");
+}
+
+if (sessionStorage.getItem(AUTH_KEY) === "1") {
+    ocultarLogin();
+}
+
+document.getElementById("formLogin").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const input = document.getElementById("fClave");
+    const error = document.getElementById("loginError");
+    const btn = e.target.querySelector("button[type=submit]");
+
+    btn.disabled = true;
+    const hash = await sha256Hex(input.value);
+    btn.disabled = false;
+
+    if (hash === CLAVE_HASH) {
+        sessionStorage.setItem(AUTH_KEY, "1");
+        error.textContent = "";
+        input.value = "";
+        ocultarLogin();
+    } else {
+        error.textContent = "Contraseña incorrecta";
+        input.value = "";
+        input.focus();
+    }
+});
+
 /* ================= INICIALIZACIÓN ================= */
-cargarDatos();
+iniciarSincronizacion();
 renderInicio();
 renderInventario();
 renderVentaActual();

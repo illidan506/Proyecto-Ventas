@@ -1,4 +1,4 @@
-<!DOCTYPE html >
+<!DOCTYPE html>
 <html lang="es">
 
 <head>
@@ -16,6 +16,20 @@
 </head>
 
 <body>
+
+    <!-- ===================== LOGIN ===================== -->
+    <div class="login-overlay" id="loginOverlay">
+        <div class="login-card">
+            <div class="brand-mark login-mark">RM</div>
+            <h1 class="login-title">RAMY MOTORS</h1>
+            <p class="login-sub">Ingresa la contraseña para continuar</p>
+            <form id="formLogin">
+                <input type="password" id="fClave" placeholder="Contraseña" autocomplete="current-password" required>
+                <p class="login-error" id="loginError"></p>
+                <button type="submit" class="btn btn-primary btn-block">Ingresar</button>
+            </form>
+        </div>
+    </div>
 
     <!-- ===================== HEADER ===================== -->
     <header class="topbar">
@@ -89,7 +103,8 @@
 
             <div class="search-box hidden" id="searchMotor">
                 <input type="text" id="inputBuscarMotor" placeholder="Ej: Honda CG150, Yamaha YBR125...">
-                <p class="hint">Escribe el nombre del motor y verás qué productos son compatibles.</p>
+                <p class="hint">Escribe el nombre de un motor y verás qué otros motores pueden usar las mismas piezas
+                    (posibles reemplazos).</p>
             </div>
 
             <div id="listaInventario" class="product-list"></div>
@@ -259,7 +274,7 @@
     <div class="toast" id="toast"></div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-    <script src="javascript.js"></script>
+    <script type="module" src="javascript.js"></script>
 </body>
 
 </html>
