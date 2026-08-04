@@ -187,6 +187,21 @@
             <div class="modal-body">
                 <form id="formProducto">
                     <input type="hidden" id="fCodigoOriginal">
+
+                    <label>Foto del producto (opcional)</label>
+                    <div class="imagen-picker">
+                        <div class="imagen-preview" id="imagenPreviewWrap">
+                            <img id="imagenPreview" alt="Vista previa" style="display:none;">
+                            <span id="imagenPreviewPlaceholder">Sin foto</span>
+                        </div>
+                        <div class="imagen-picker-btns">
+                            <label class="btn btn-outline btn-sm" for="fImagen">📷 Elegir / tomar foto</label>
+                            <button type="button" class="btn btn-danger btn-sm hidden" id="btnQuitarImagen">Quitar
+                                foto</button>
+                        </div>
+                        <input type="file" id="fImagen" accept="image/*" capture="environment" style="display:none;">
+                    </div>
+
                     <label>Código</label>
                     <input type="text" id="fCodigo" required>
 
@@ -268,6 +283,15 @@
                 <button class="btn btn-outline btn-block" data-close="modalFactura">Cerrar</button>
             </div>
         </div>
+    </div>
+
+    <!-- ===================== VISOR: FOTO AMPLIADA ===================== -->
+    <div class="lightbox-overlay hidden" id="modalImagen">
+        <button class="lightbox-close" id="btnCerrarImagen">✕</button>
+        <div class="lightbox-scroll" id="lightboxScroll">
+            <img id="lightboxImg" src="" alt="Foto del producto">
+        </div>
+        <p class="lightbox-hint">Toca la foto para ampliar / reducir</p>
     </div>
 
     <!-- ===================== TOAST ===================== -->

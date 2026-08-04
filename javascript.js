@@ -52,6 +52,128 @@ let carrito = []; // [{codigo, nombre, marca, precio, cantidad, subtotal}]
 let productoSeleccionadoVenta = null;
 let ultimaVentaGenerada = null;
 
+/* ================= FOTO DEL PRODUCTO (NUEVO) =================
+   La foto se comprime en el propio teléfono y se guarda como
+   texto (Base64) dentro del mismo documento de Firestore. No
+   se usa Firebase Storage: desde 2026 ese servicio exige el
+   plan de pago Blaze (tarjeta), mientras que Firestore sigue
+   siendo gratis. Así la foto viaja con el producto y se
+   sincroniza con todos los teléfonos sin nada nuevo que
+   configurar ni activar. */
+const IMAGEN_MAX_BASE64 = 700000; // margen de seguridad bajo el límite de 1 MiB por documento de Firestore
+
+let imagenPendiente = null; // Base64 de la foto recién elegida en el formulario (o null si no cambió)
+let imagenFueQuitada = false;
+
+function comprimirImagenABase64(file, maxDim, calidad) {
+    return new Promise((resolve, reject) => {
+        const img = new Image();
+        const url = URL.createObjectURL(file);
+        img.onload = () => {
+            URL.revokeObjectURL(url);
+            let { width, height } = img;
+            if (width >= height && width > maxDim) {
+                height = Math.round(height * (maxDim / width));
+                width = maxDim;
+            } else if (height > width && height > maxDim) {
+                width = Math.round(width * (maxDim / height));
+                height = maxDim;
+            }
+            const canvas = document.createElement("canvas");
+            canvas.width = width;
+            canvas.height = height;
+            canvas.getContext("2d").drawImage(img, 0, 0, width, height);
+            resolve(canvas.toDataURL("image/jpeg", calidad));
+        };
+        img.onerror = () => {
+            URL.revokeObjectURL(url);
+            reject(new Error("No se pudo leer la imagen"));
+        };
+        img.src = url;
+    });
+}
+
+async function procesarImagenSeleccionada(file) {
+    const intentos = [
+        { maxDim: 900, calidad: 0.7 },
+        { maxDim: 700, calidad: 0.55 },
+        { maxDim: 500, calidad: 0.4 }
+    ];
+
+    for (const intento of intentos) {
+        const base64 = await comprimirImagenABase64(file, intento.maxDim, intento.calidad);
+        if (base64.length <= IMAGEN_MAX_BASE64) return base64;
+    }
+
+    throw new Error("La imagen es muy pesada incluso comprimida. Prueba con otra foto.");
+}
+
+function mostrarPreviewImagen(base64) {
+    const img = document.getElementById("imagenPreview");
+    const placeholder = document.getElementById("imagenPreviewPlaceholder");
+    const btnQuitar = document.getElementById("btnQuitarImagen");
+
+    if (base64) {
+        img.src = base64;
+        img.style.display = "block";
+        placeholder.style.display = "none";
+        btnQuitar.classList.remove("hidden");
+    } else {
+        img.src = "";
+        img.style.display = "none";
+        placeholder.style.display = "block";
+        placeholder.textContent = "Sin foto";
+        btnQuitar.classList.add("hidden");
+    }
+}
+
+document.getElementById("fImagen").addEventListener("change", async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const placeholder = document.getElementById("imagenPreviewPlaceholder");
+    const btnGuardar = document.querySelector("#formProducto button[type=submit]");
+    placeholder.style.display = "block";
+    placeholder.textContent = "Procesando foto...";
+    btnGuardar.disabled = true;
+
+    try {
+        const base64 = await procesarImagenSeleccionada(file);
+        imagenPendiente = base64;
+        imagenFueQuitada = false;
+        mostrarPreviewImagen(base64);
+    } catch (error) {
+        console.error(error);
+        toast(error.message || "No se pudo procesar la foto");
+        mostrarPreviewImagen(imagenPendiente);
+    } finally {
+        btnGuardar.disabled = false;
+        e.target.value = "";
+    }
+});
+
+document.getElementById("btnQuitarImagen").addEventListener("click", () => {
+    imagenPendiente = null;
+    imagenFueQuitada = true;
+    mostrarPreviewImagen(null);
+});
+
+/* ---- visor: ver foto ampliada ---- */
+function abrirImagenAmpliada(base64) {
+    if (!base64) return;
+    document.getElementById("lightboxImg").src = base64;
+    document.getElementById("lightboxScroll").classList.remove("zoomed");
+    document.getElementById("modalImagen").classList.remove("hidden");
+}
+
+document.getElementById("btnCerrarImagen").addEventListener("click", () => {
+    document.getElementById("modalImagen").classList.add("hidden");
+});
+
+document.getElementById("lightboxImg").addEventListener("click", () => {
+    document.getElementById("lightboxScroll").classList.toggle("zoomed");
+});
+
 /* ================= SINCRONIZACIÓN CON FIRESTORE =================
    Reemplaza el antiguo localStorage. "productos" y "ventas" se
    mantienen actualizados en tiempo real: si otro dispositivo
@@ -285,6 +407,13 @@ function renderInventario() {
         card.querySelector(".product-card-top").addEventListener("click", () => {
             card.querySelector(".product-details").classList.toggle("open");
         });
+        const miniatura = card.querySelector(".product-thumb");
+        if (miniatura) {
+            miniatura.addEventListener("click", (e) => {
+                e.stopPropagation();
+                abrirImagenAmpliada(miniatura.getAttribute("src"));
+            });
+        }
         const btnEdit = card.querySelector(".btn-editar");
         const btnDel = card.querySelector(".btn-eliminar");
         if (btnEdit) btnEdit.addEventListener("click", (e) => { e.stopPropagation(); abrirFormularioEdicion(codigo); });
@@ -339,13 +468,20 @@ function tarjetaMotor(r) {
 
 function tarjetaProducto(p) {
     const bajo = p.cantidad <= STOCK_BAJO_LIMITE;
+    const miniatura = p.imagenBase64
+        ? `<img src="${p.imagenBase64}" class="product-thumb" alt="Foto de ${escapeHtml(p.nombre)}">`
+        : `<div class="product-thumb-placeholder"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="11" r="2"/><path d="m21 16-5-4-4 3-3-2-6 5"/></svg></div>`;
+
     return `
   <div class="product-card" data-codigo="${escapeHtml(p.codigo)}">
     <div class="product-card-top">
-      <div>
-        <div class="product-name">${escapeHtml(p.nombre)}</div>
-        <div class="product-meta">${escapeHtml(p.codigo)} · ${escapeHtml(p.marca)} · ${escapeHtml(p.categoria)}</div>
-        <span class="product-stock ${bajo ? "low" : ""}">Stock: ${p.cantidad}</span>
+      <div class="product-card-top-row">
+        ${miniatura}
+        <div>
+          <div class="product-name">${escapeHtml(p.nombre)}</div>
+          <div class="product-meta">${escapeHtml(p.codigo)} · ${escapeHtml(p.marca)} · ${escapeHtml(p.categoria)}</div>
+          <span class="product-stock ${bajo ? "low" : ""}">Stock: ${p.cantidad}</span>
+        </div>
       </div>
       <div class="product-price">${formatoMoneda(p.precio)}</div>
     </div>
@@ -373,6 +509,9 @@ document.getElementById("btnAbrirNuevoProducto").addEventListener("click", () =>
     document.getElementById("formProducto").reset();
     document.getElementById("fCodigoOriginal").value = "";
     document.getElementById("fCodigo").disabled = false;
+    imagenPendiente = null;
+    imagenFueQuitada = false;
+    mostrarPreviewImagen(null);
     abrirModal("modalProducto");
 });
 
@@ -390,6 +529,9 @@ function abrirFormularioEdicion(codigo) {
     document.getElementById("fDetalles").value = p.detalles || "";
     document.getElementById("fCantidad").value = p.cantidad;
     document.getElementById("fPrecio").value = p.precio;
+    imagenPendiente = null;
+    imagenFueQuitada = false;
+    mostrarPreviewImagen(p.imagenBase64 || null);
     abrirModal("modalProducto");
 }
 
@@ -414,6 +556,18 @@ document.getElementById("formProducto").addEventListener("submit", async (e) => 
     }
 
     const codigoOriginal = document.getElementById("fCodigoOriginal").value;
+
+    if (imagenPendiente) {
+        datos.imagenBase64 = imagenPendiente;
+    } else if (imagenFueQuitada) {
+        datos.imagenBase64 = "";
+    } else if (codigoOriginal) {
+        const actual = buscarPorCodigo(codigoOriginal);
+        datos.imagenBase64 = (actual && actual.imagenBase64) ? actual.imagenBase64 : "";
+    } else {
+        datos.imagenBase64 = "";
+    }
+
     const btnGuardar = document.querySelector("#formProducto button[type=submit]");
     btnGuardar.disabled = true;
 
@@ -489,19 +643,35 @@ function renderResultadosVenta(texto) {
         return;
     }
 
-    cont.innerHTML = lista.map(p => `
+    cont.innerHTML = lista.map(p => {
+        const miniatura = p.imagenBase64
+            ? `<img src="${p.imagenBase64}" class="product-thumb" alt="Foto de ${escapeHtml(p.nombre)}">`
+            : `<div class="product-thumb-placeholder"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="11" r="2"/><path d="m21 16-5-4-4 3-3-2-6 5"/></svg></div>`;
+        return `
     <div class="product-card" data-codigo="${escapeHtml(p.codigo)}">
       <div class="product-card-top">
-        <div>
-          <div class="product-name">${escapeHtml(p.nombre)}</div>
-          <div class="product-meta">${escapeHtml(p.codigo)} · Stock: ${p.cantidad}</div>
+        <div class="product-card-top-row">
+          ${miniatura}
+          <div>
+            <div class="product-name">${escapeHtml(p.nombre)}</div>
+            <div class="product-meta">${escapeHtml(p.codigo)} · Stock: ${p.cantidad}</div>
+          </div>
         </div>
         <div class="product-price">${formatoMoneda(p.precio)}</div>
       </div>
-    </div>`).join("");
+    </div>`;
+    }).join("");
 
     cont.querySelectorAll(".product-card").forEach(card => {
-        card.addEventListener("click", () => seleccionarProductoVenta(card.dataset.codigo));
+        card.addEventListener("click", (e) => {
+            const miniatura = e.target.closest(".product-thumb");
+            if (miniatura) {
+                e.stopPropagation();
+                abrirImagenAmpliada(miniatura.getAttribute("src"));
+                return;
+            }
+            seleccionarProductoVenta(card.dataset.codigo);
+        });
     });
 }
 
