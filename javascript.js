@@ -265,7 +265,10 @@ document.querySelectorAll("[data-nav]").forEach(el => {
 
 /* ================= MODALES ================= */
 function abrirModal(id) {
-    document.getElementById(id).classList.remove("hidden");
+    const modal = document.getElementById(id);
+    modal.classList.remove("hidden");
+    const sheet = modal.querySelector(".modal-sheet");
+    if (sheet) sheet.scrollTop = 0;
 }
 function cerrarModal(id) {
     document.getElementById(id).classList.add("hidden");
