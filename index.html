@@ -103,8 +103,7 @@
 
             <div class="search-box hidden" id="searchMotor">
                 <input type="text" id="inputBuscarMotor" placeholder="Ej: Honda CG150, Yamaha YBR125...">
-                <p class="hint">Escribe el nombre de un motor y verás qué otros motores pueden usar las mismas piezas
-                    (posibles reemplazos).</p>
+                <p class="hint">Escribe el nombre de un motor y verás qué productos son compatibles con él.</p>
             </div>
 
             <div id="listaInventario" class="product-list"></div>
@@ -123,6 +122,12 @@
             <div class="carrito-total">
                 <span>Total</span>
                 <span id="carritoTotal">Bs 0.00</span>
+            </div>
+
+            <div class="monto-cobrar-row">
+                <label for="montoACobrar">Monto a cobrar (Bs) — edítalo si hay rebaja</label>
+                <input type="number" id="montoACobrar" min="0" step="0.01">
+                <p class="hint" id="descuentoHint"></p>
             </div>
 
             <button class="btn btn-success btn-block" id="btnConfirmarVenta">Confirmar Venta</button>
@@ -188,18 +193,32 @@
                 <form id="formProducto">
                     <input type="hidden" id="fCodigoOriginal">
 
-                    <label>Foto del producto (opcional)</label>
+                    <label>Foto 1 (opcional)</label>
                     <div class="imagen-picker">
-                        <div class="imagen-preview" id="imagenPreviewWrap">
-                            <img id="imagenPreview" alt="Vista previa" style="display:none;">
-                            <span id="imagenPreviewPlaceholder">Sin foto</span>
+                        <div class="imagen-preview" id="imagenPreviewWrap1">
+                            <img id="imagenPreview1" alt="Vista previa 1" style="display:none;">
+                            <span id="imagenPreviewPlaceholder1">Sin foto</span>
                         </div>
                         <div class="imagen-picker-btns">
-                            <label class="btn btn-outline btn-sm" for="fImagen">📷 Elegir / tomar foto</label>
-                            <button type="button" class="btn btn-danger btn-sm hidden" id="btnQuitarImagen">Quitar
+                            <label class="btn btn-outline btn-sm" for="fImagen1">📷 Elegir foto</label>
+                            <button type="button" class="btn btn-danger btn-sm hidden" id="btnQuitarImagen1">Quitar
                                 foto</button>
                         </div>
-                        <input type="file" id="fImagen" accept="image/*" capture="environment" style="display:none;">
+                        <input type="file" id="fImagen1" accept="image/*" style="display:none;">
+                    </div>
+
+                    <label>Foto 2 (opcional)</label>
+                    <div class="imagen-picker">
+                        <div class="imagen-preview" id="imagenPreviewWrap2">
+                            <img id="imagenPreview2" alt="Vista previa 2" style="display:none;">
+                            <span id="imagenPreviewPlaceholder2">Sin foto</span>
+                        </div>
+                        <div class="imagen-picker-btns">
+                            <label class="btn btn-outline btn-sm" for="fImagen2">📷 Elegir foto</label>
+                            <button type="button" class="btn btn-danger btn-sm hidden" id="btnQuitarImagen2">Quitar
+                                foto</button>
+                        </div>
+                        <input type="file" id="fImagen2" accept="image/*" style="display:none;">
                     </div>
 
                     <label>Código</label>
@@ -288,10 +307,13 @@
     <!-- ===================== VISOR: FOTO AMPLIADA ===================== -->
     <div class="lightbox-overlay hidden" id="modalImagen">
         <button class="lightbox-close" id="btnCerrarImagen">✕</button>
+        <button class="lightbox-nav lightbox-prev hidden" id="btnFotoAnterior">‹</button>
+        <button class="lightbox-nav lightbox-next hidden" id="btnFotoSiguiente">›</button>
         <div class="lightbox-scroll" id="lightboxScroll">
             <img id="lightboxImg" src="" alt="Foto del producto">
         </div>
         <p class="lightbox-hint">Toca la foto para ampliar / reducir</p>
+        <p class="lightbox-dots hidden" id="lightboxDots"></p>
     </div>
 
     <!-- ===================== TOAST ===================== -->

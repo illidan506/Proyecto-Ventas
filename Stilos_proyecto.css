@@ -536,6 +536,37 @@ textarea {
     color: var(--accent);
 }
 
+/* ============ MONTO A COBRAR / REBAJA (NUEVO) ============ */
+.monto-cobrar-row {
+    margin-bottom: 16px;
+}
+
+.monto-cobrar-row label {
+    display: block;
+    font-size: 12px;
+    color: var(--text-dim);
+    margin-bottom: 6px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.monto-cobrar-row input {
+    width: 100%;
+    padding: 12px 14px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: var(--bg-elev);
+    color: var(--text);
+    font-family: var(--font-mono);
+    font-size: 16px;
+    font-weight: 700;
+}
+
+.monto-cobrar-row .hint {
+    margin: 6px 2px 0;
+    color: var(--warning);
+}
+
 /* ============ HISTORIAL ============ */
 .historial-controls {
     display: flex;
@@ -1099,4 +1130,57 @@ textarea {
     font-size: 12px;
     z-index: 310;
     pointer-events: none;
+}
+
+.lightbox-nav {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    z-index: 310;
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.12);
+    color: #fff;
+    border: none;
+    font-size: 26px;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.lightbox-nav.hidden {
+    display: none;
+}
+
+.lightbox-prev {
+    left: 14px;
+}
+
+.lightbox-next {
+    right: 14px;
+}
+
+.lightbox-dots {
+    position: absolute;
+    bottom: 44px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    gap: 6px;
+    z-index: 310;
+}
+
+.lightbox-dots.hidden {
+    display: none;
+}
+
+.lightbox-dots span {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.35);
+}
+
+.lightbox-dots span.activo {
+    background: #fff;
 }

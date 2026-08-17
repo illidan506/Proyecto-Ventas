@@ -52,18 +52,21 @@ let carrito = []; // [{codigo, nombre, marca, precio, cantidad, subtotal}]
 let productoSeleccionadoVenta = null;
 let ultimaVentaGenerada = null;
 
-/* ================= FOTO DEL PRODUCTO (NUEVO) =================
-   La foto se comprime en el propio teléfono y se guarda como
-   texto (Base64) dentro del mismo documento de Firestore. No
-   se usa Firebase Storage: desde 2026 ese servicio exige el
-   plan de pago Blaze (tarjeta), mientras que Firestore sigue
-   siendo gratis. Así la foto viaja con el producto y se
-   sincroniza con todos los teléfonos sin nada nuevo que
-   configurar ni activar. */
-const IMAGEN_MAX_BASE64 = 700000; // margen de seguridad bajo el límite de 1 MiB por documento de Firestore
+/* ================= FOTOS DEL PRODUCTO (NUEVO) =================
+   Cada producto admite hasta 2 fotos. Se comprimen en el propio
+   teléfono y se guardan como texto (Base64) dentro del mismo
+   documento de Firestore, en un arreglo "imagenesBase64". No se
+   usa Firebase Storage: desde 2026 ese servicio exige el plan de
+   pago Blaze (tarjeta), mientras que Firestore sigue siendo
+   gratis. Con 2 fotos por producto, cada una debe pesar menos
+   (para que ambas quepan bajo el límite de 1 MiB por documento). */
+const IMAGEN_MAX_BASE64 = 450000; // por foto: deja margen para 2 fotos + los demás campos, bajo 1 MiB
 
-let imagenPendiente = null; // Base64 de la foto recién elegida en el formulario (o null si no cambió)
-let imagenFueQuitada = false;
+// estado[1] y estado[2]: una entrada por cada uno de los 2 slots de foto
+const estadoFotos = {
+    1: { pendiente: null, quitada: false },
+    2: { pendiente: null, quitada: false }
+};
 
 function comprimirImagenABase64(file, maxDim, calidad) {
     return new Promise((resolve, reject) => {
@@ -96,8 +99,8 @@ function comprimirImagenABase64(file, maxDim, calidad) {
 async function procesarImagenSeleccionada(file) {
     const intentos = [
         { maxDim: 900, calidad: 0.7 },
-        { maxDim: 700, calidad: 0.55 },
-        { maxDim: 500, calidad: 0.4 }
+        { maxDim: 700, calidad: 0.5 },
+        { maxDim: 500, calidad: 0.35 }
     ];
 
     for (const intento of intentos) {
@@ -108,10 +111,10 @@ async function procesarImagenSeleccionada(file) {
     throw new Error("La imagen es muy pesada incluso comprimida. Prueba con otra foto.");
 }
 
-function mostrarPreviewImagen(base64) {
-    const img = document.getElementById("imagenPreview");
-    const placeholder = document.getElementById("imagenPreviewPlaceholder");
-    const btnQuitar = document.getElementById("btnQuitarImagen");
+function mostrarPreviewImagen(slot, base64) {
+    const img = document.getElementById("imagenPreview" + slot);
+    const placeholder = document.getElementById("imagenPreviewPlaceholder" + slot);
+    const btnQuitar = document.getElementById("btnQuitarImagen" + slot);
 
     if (base64) {
         img.src = base64;
@@ -127,43 +130,98 @@ function mostrarPreviewImagen(base64) {
     }
 }
 
-document.getElementById("fImagen").addEventListener("change", async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
+function conectarSelectorDeFoto(slot) {
+    document.getElementById("fImagen" + slot).addEventListener("change", async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
 
-    const placeholder = document.getElementById("imagenPreviewPlaceholder");
-    const btnGuardar = document.querySelector("#formProducto button[type=submit]");
-    placeholder.style.display = "block";
-    placeholder.textContent = "Procesando foto...";
-    btnGuardar.disabled = true;
+        const placeholder = document.getElementById("imagenPreviewPlaceholder" + slot);
+        const btnGuardar = document.querySelector("#formProducto button[type=submit]");
+        placeholder.style.display = "block";
+        placeholder.textContent = "Procesando foto...";
+        btnGuardar.disabled = true;
 
-    try {
-        const base64 = await procesarImagenSeleccionada(file);
-        imagenPendiente = base64;
-        imagenFueQuitada = false;
-        mostrarPreviewImagen(base64);
-    } catch (error) {
-        console.error(error);
-        toast(error.message || "No se pudo procesar la foto");
-        mostrarPreviewImagen(imagenPendiente);
-    } finally {
-        btnGuardar.disabled = false;
-        e.target.value = "";
+        try {
+            const base64 = await procesarImagenSeleccionada(file);
+            estadoFotos[slot].pendiente = base64;
+            estadoFotos[slot].quitada = false;
+            mostrarPreviewImagen(slot, base64);
+        } catch (error) {
+            console.error(error);
+            toast(error.message || "No se pudo procesar la foto");
+            mostrarPreviewImagen(slot, estadoFotos[slot].pendiente);
+        } finally {
+            btnGuardar.disabled = false;
+            e.target.value = "";
+        }
+    });
+
+    document.getElementById("btnQuitarImagen" + slot).addEventListener("click", () => {
+        estadoFotos[slot].pendiente = null;
+        estadoFotos[slot].quitada = true;
+        mostrarPreviewImagen(slot, null);
+    });
+}
+
+conectarSelectorDeFoto(1);
+conectarSelectorDeFoto(2);
+
+function resetearEstadoFotos() {
+    estadoFotos[1] = { pendiente: null, quitada: false };
+    estadoFotos[2] = { pendiente: null, quitada: false };
+    mostrarPreviewImagen(1, null);
+    mostrarPreviewImagen(2, null);
+}
+
+function cargarFotosExistentes(imagenesBase64) {
+    const lista = imagenesBase64 || [];
+    estadoFotos[1] = { pendiente: null, quitada: false };
+    estadoFotos[2] = { pendiente: null, quitada: false };
+    mostrarPreviewImagen(1, lista[0] || null);
+    mostrarPreviewImagen(2, lista[1] || null);
+}
+
+function construirArregloDeFotos(codigoOriginal, imagenesExistentesOriginal) {
+    const resultado = [];
+    for (const slot of [1, 2]) {
+        let valor = null;
+        if (estadoFotos[slot].pendiente) {
+            valor = estadoFotos[slot].pendiente;
+        } else if (estadoFotos[slot].quitada) {
+            valor = null;
+        } else if (codigoOriginal) {
+            valor = (imagenesExistentesOriginal || [])[slot - 1] || null;
+        }
+        if (valor) resultado.push(valor);
     }
-});
+    return resultado;
+}
 
-document.getElementById("btnQuitarImagen").addEventListener("click", () => {
-    imagenPendiente = null;
-    imagenFueQuitada = true;
-    mostrarPreviewImagen(null);
-});
+/* ---- visor: ver foto(s) ampliada(s), con flechas si hay más de una ---- */
+let fotosVisorActual = [];
+let indiceFotoVisor = 0;
 
-/* ---- visor: ver foto ampliada ---- */
-function abrirImagenAmpliada(base64) {
-    if (!base64) return;
-    document.getElementById("lightboxImg").src = base64;
-    document.getElementById("lightboxScroll").classList.remove("zoomed");
+function abrirImagenAmpliada(fotos, indiceInicial) {
+    fotosVisorActual = (fotos || []).filter(Boolean);
+    if (fotosVisorActual.length === 0) return;
+    indiceFotoVisor = indiceInicial || 0;
+    pintarFotoVisor();
     document.getElementById("modalImagen").classList.remove("hidden");
+}
+
+function pintarFotoVisor() {
+    document.getElementById("lightboxImg").src = fotosVisorActual[indiceFotoVisor];
+    document.getElementById("lightboxScroll").classList.remove("zoomed");
+
+    const haySVarias = fotosVisorActual.length > 1;
+    document.getElementById("btnFotoAnterior").classList.toggle("hidden", !haySVarias);
+    document.getElementById("btnFotoSiguiente").classList.toggle("hidden", !haySVarias);
+
+    const dots = document.getElementById("lightboxDots");
+    dots.classList.toggle("hidden", !haySVarias);
+    dots.innerHTML = fotosVisorActual.map((_, i) =>
+        `<span class="${i === indiceFotoVisor ? "activo" : ""}"></span>`
+    ).join("");
 }
 
 document.getElementById("btnCerrarImagen").addEventListener("click", () => {
@@ -173,6 +231,61 @@ document.getElementById("btnCerrarImagen").addEventListener("click", () => {
 document.getElementById("lightboxImg").addEventListener("click", () => {
     document.getElementById("lightboxScroll").classList.toggle("zoomed");
 });
+
+document.getElementById("btnFotoAnterior").addEventListener("click", () => {
+    indiceFotoVisor = (indiceFotoVisor - 1 + fotosVisorActual.length) % fotosVisorActual.length;
+    pintarFotoVisor();
+});
+
+document.getElementById("btnFotoSiguiente").addEventListener("click", () => {
+    indiceFotoVisor = (indiceFotoVisor + 1) % fotosVisorActual.length;
+    pintarFotoVisor();
+});
+
+/* ================= CÓDIGO AUTOMÁTICO DE PRODUCTO (NUEVO) =================
+   Cada producto nuevo recibe un código consecutivo (0001, 0002...)
+   generado solo. Se reserva mediante una transacción de Firestore
+   -igual que el número de venta- para que dos teléfonos nunca
+   puedan generar el mismo código al mismo tiempo. */
+const refContadorProductos = doc(db, "meta", "contadorProductos");
+let siguienteCodigoProductoPreview = 1;
+
+onSnapshot(refContadorProductos, (snap) => {
+    siguienteCodigoProductoPreview = snap.exists() ? snap.data().siguiente : 1;
+}, (error) => console.error("Error leyendo contador de productos:", error));
+
+async function crearProductoConCodigoAutomatico(datos) {
+    return await runTransaction(db, async (transaction) => {
+        const contadorSnap = await transaction.get(refContadorProductos);
+        let siguiente = contadorSnap.exists() ? contadorSnap.data().siguiente : 1;
+
+        // Normalmente el código generado está libre. Pero si alguien renombró
+        // manualmente otro producto para que coincida con un número futuro del
+        // contador (p. ej. al editar), este bucle salta ese código ocupado en
+        // vez de quedar atascado para siempre pidiendo el mismo número.
+        let codigo = String(siguiente).padStart(4, "0");
+        let productoRef = doc(refProductos, codigo);
+        let productoSnap = await transaction.get(productoRef);
+        let intentos = 0;
+
+        while (productoSnap.exists() && intentos < 50) {
+            siguiente++;
+            codigo = String(siguiente).padStart(4, "0");
+            productoRef = doc(refProductos, codigo);
+            productoSnap = await transaction.get(productoRef);
+            intentos++;
+        }
+
+        if (productoSnap.exists()) {
+            throw new Error("No se pudo generar un código disponible. Intenta de nuevo.");
+        }
+
+        transaction.set(productoRef, { ...datos, codigo });
+        transaction.set(refContadorProductos, { siguiente: siguiente + 1 });
+
+        return codigo;
+    });
+}
 
 /* ================= SINCRONIZACIÓN CON FIRESTORE =================
    Reemplaza el antiguo localStorage. "productos" y "ventas" se
@@ -338,37 +451,18 @@ function buscarGeneral(texto) {
     );
 }
 
-/* ---- referencia cruzada de motores ----
+/* ---- ver compatibilidad (motor -> productos compatibles) ----
    El campo "compatibilidad" guarda motores separados por coma.
-   Dado el nombre de un motor, se buscan los productos que lo
-   incluyen y se listan los DEMÁS motores que aparecen en esos
-   mismos productos: es decir, qué motores pueden reemplazarlo
-   (usan la misma pieza). */
-function obtenerMotoresProducto(p) {
-    return (p.compatibilidad || "").split(",").map(m => m.trim()).filter(Boolean);
-}
-
-function buscarMotoresRelacionados(texto) {
+   Dado el nombre de un motor, se listan los PRODUCTOS cuya
+   compatibilidad lo incluye, usando la misma tarjeta que el
+   inventario normal (con foto, stock, precio, editar/eliminar). */
+function buscarPorMotor(texto) {
     const q = texto.trim().toLowerCase();
     if (!q) return [];
-
-    const productosCoincidentes = productos.filter(p =>
-        obtenerMotoresProducto(p).some(m => m.toLowerCase().includes(q))
-    );
-
-    const mapa = new Map(); // motor relacionado -> productos que lo comparten
-
-    productosCoincidentes.forEach(p => {
-        obtenerMotoresProducto(p).forEach(motor => {
-            if (motor.toLowerCase().includes(q)) return; // omite el motor buscado
-            if (!mapa.has(motor)) mapa.set(motor, []);
-            mapa.get(motor).push(p);
-        });
+    return productos.filter(p => {
+        const motores = (p.compatibilidad || "").split(",").map(m => m.trim().toLowerCase());
+        return motores.some(m => m.includes(q));
     });
-
-    return [...mapa.entries()]
-        .map(([motor, prods]) => ({ motor, productos: prods }))
-        .sort((a, b) => a.motor.localeCompare(b.motor));
 }
 
 /* ================= RENDER: INVENTARIO ================= */
@@ -388,6 +482,36 @@ document.querySelectorAll(".tab-btn").forEach(btn => {
 document.getElementById("inputBuscarGeneral").addEventListener("input", renderInventario);
 document.getElementById("inputBuscarMotor").addEventListener("input", renderInventario);
 
+/* ---- conecta los eventos (ver detalles, foto, editar, eliminar) de
+   un grupo de tarjetas de producto. Se reutiliza en ambos modos de
+   búsqueda (general y por motor) para no duplicar lógica. ---- */
+function conectarEventosTarjetas(cont) {
+    cont.querySelectorAll(".product-card").forEach(card => {
+        const codigo = card.dataset.codigo;
+        card.querySelector(".product-card-top").addEventListener("click", () => {
+            card.querySelector(".product-details").classList.toggle("open");
+        });
+        const miniatura = card.querySelector(".product-thumb");
+        if (miniatura) {
+            miniatura.addEventListener("click", (e) => {
+                e.stopPropagation();
+                const p = buscarPorCodigo(codigo);
+                abrirImagenAmpliada(p ? p.imagenesBase64 : [], 0);
+            });
+        }
+        const btnEdit = card.querySelector(".btn-editar");
+        const btnDel = card.querySelector(".btn-eliminar");
+        if (btnEdit) btnEdit.addEventListener("click", (e) => { e.stopPropagation(); abrirFormularioEdicion(codigo); });
+        if (btnDel) btnDel.addEventListener("click", async (e) => {
+            e.stopPropagation();
+            if (confirm(`¿Eliminar el producto "${codigo}"? Esta acción no se puede deshacer.`)) {
+                const ok = await eliminarProducto(codigo);
+                if (ok) toast("Producto eliminado");
+            }
+        });
+    });
+}
+
 function renderInventario() {
     if (modoBusqueda === "motor") {
         renderResultadosMotor(document.getElementById("inputBuscarMotor").value);
@@ -404,75 +528,33 @@ function renderInventario() {
     }
 
     cont.innerHTML = lista.map(p => tarjetaProducto(p)).join("");
-
-    cont.querySelectorAll(".product-card").forEach(card => {
-        const codigo = card.dataset.codigo;
-        card.querySelector(".product-card-top").addEventListener("click", () => {
-            card.querySelector(".product-details").classList.toggle("open");
-        });
-        const miniatura = card.querySelector(".product-thumb");
-        if (miniatura) {
-            miniatura.addEventListener("click", (e) => {
-                e.stopPropagation();
-                abrirImagenAmpliada(miniatura.getAttribute("src"));
-            });
-        }
-        const btnEdit = card.querySelector(".btn-editar");
-        const btnDel = card.querySelector(".btn-eliminar");
-        if (btnEdit) btnEdit.addEventListener("click", (e) => { e.stopPropagation(); abrirFormularioEdicion(codigo); });
-        if (btnDel) btnDel.addEventListener("click", async (e) => {
-            e.stopPropagation();
-            if (confirm(`¿Eliminar el producto "${codigo}"? Esta acción no se puede deshacer.`)) {
-                const ok = await eliminarProducto(codigo);
-                if (ok) toast("Producto eliminado");
-            }
-        });
-    });
+    conectarEventosTarjetas(cont);
 }
 
 function renderResultadosMotor(texto) {
     const cont = document.getElementById("listaInventario");
 
     if (!texto.trim()) {
-        cont.innerHTML = `<p class="empty-msg">Escribe el nombre de un motor para ver qué otros motores pueden reemplazarlo.</p>`;
+        cont.innerHTML = `<p class="empty-msg">Escribe el nombre de un motor para ver los productos compatibles.</p>`;
         return;
     }
 
-    const relacionados = buscarMotoresRelacionados(texto);
+    const lista = buscarPorMotor(texto);
 
-    if (relacionados.length === 0) {
-        cont.innerHTML = `<p class="empty-msg">No se encontraron motores compatibles.</p>`;
+    if (lista.length === 0) {
+        cont.innerHTML = `<p class="empty-msg">No se encontraron productos compatibles con ese motor.</p>`;
         return;
     }
 
-    cont.innerHTML = relacionados.map(r => tarjetaMotor(r)).join("");
-
-    cont.querySelectorAll(".product-card").forEach(card => {
-        card.querySelector(".product-card-top").addEventListener("click", () => {
-            card.querySelector(".product-details").classList.toggle("open");
-        });
-    });
-}
-
-function tarjetaMotor(r) {
-    return `
-  <div class="product-card">
-    <div class="product-card-top">
-      <div>
-        <div class="product-name">${escapeHtml(r.motor)}</div>
-        <div class="product-meta">${r.productos.length} producto(s) en común</div>
-      </div>
-    </div>
-    <div class="product-details">
-      ${r.productos.map(p => `<p><b>${escapeHtml(p.nombre)}</b> — ${escapeHtml(p.codigo)}</p>`).join("")}
-    </div>
-  </div>`;
+    cont.innerHTML = lista.map(p => tarjetaProducto(p)).join("");
+    conectarEventosTarjetas(cont);
 }
 
 function tarjetaProducto(p) {
     const bajo = p.cantidad <= STOCK_BAJO_LIMITE;
-    const miniatura = p.imagenBase64
-        ? `<img src="${p.imagenBase64}" class="product-thumb" alt="Foto de ${escapeHtml(p.nombre)}">`
+    const fotos = p.imagenesBase64 || [];
+    const miniatura = fotos[0]
+        ? `<img src="${fotos[0]}" class="product-thumb" alt="Foto de ${escapeHtml(p.nombre)}">`
         : `<div class="product-thumb-placeholder"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="11" r="2"/><path d="m21 16-5-4-4 3-3-2-6 5"/></svg></div>`;
 
     return `
@@ -511,10 +593,9 @@ document.getElementById("btnAbrirNuevoProducto").addEventListener("click", () =>
     document.getElementById("modalProductoTitulo").textContent = "Nuevo Producto";
     document.getElementById("formProducto").reset();
     document.getElementById("fCodigoOriginal").value = "";
-    document.getElementById("fCodigo").disabled = false;
-    imagenPendiente = null;
-    imagenFueQuitada = false;
-    mostrarPreviewImagen(null);
+    document.getElementById("fCodigo").value = String(siguienteCodigoProductoPreview).padStart(4, "0");
+    document.getElementById("fCodigo").disabled = true;
+    resetearEstadoFotos();
     abrirModal("modalProducto");
 });
 
@@ -524,6 +605,7 @@ function abrirFormularioEdicion(codigo) {
     document.getElementById("modalProductoTitulo").textContent = "Editar Producto";
     document.getElementById("fCodigoOriginal").value = p.codigo;
     document.getElementById("fCodigo").value = p.codigo;
+    document.getElementById("fCodigo").disabled = false;
     document.getElementById("fNombre").value = p.nombre;
     document.getElementById("fMarca").value = p.marca;
     document.getElementById("fCategoria").value = p.categoria;
@@ -532,9 +614,7 @@ function abrirFormularioEdicion(codigo) {
     document.getElementById("fDetalles").value = p.detalles || "";
     document.getElementById("fCantidad").value = p.cantidad;
     document.getElementById("fPrecio").value = p.precio;
-    imagenPendiente = null;
-    imagenFueQuitada = false;
-    mostrarPreviewImagen(p.imagenBase64 || null);
+    cargarFotosExistentes(p.imagenesBase64);
     abrirModal("modalProducto");
 }
 
@@ -559,32 +639,38 @@ document.getElementById("formProducto").addEventListener("submit", async (e) => 
     }
 
     const codigoOriginal = document.getElementById("fCodigoOriginal").value;
-
-    if (imagenPendiente) {
-        datos.imagenBase64 = imagenPendiente;
-    } else if (imagenFueQuitada) {
-        datos.imagenBase64 = "";
-    } else if (codigoOriginal) {
-        const actual = buscarPorCodigo(codigoOriginal);
-        datos.imagenBase64 = (actual && actual.imagenBase64) ? actual.imagenBase64 : "";
-    } else {
-        datos.imagenBase64 = "";
-    }
+    datos.imagenesBase64 = construirArregloDeFotos(codigoOriginal, codigoOriginal ? buscarPorCodigo(codigoOriginal)?.imagenesBase64 : null);
 
     const btnGuardar = document.querySelector("#formProducto button[type=submit]");
     btnGuardar.disabled = true;
 
-    const resultado = await agregarOEditarProducto(datos, codigoOriginal || null);
+    if (codigoOriginal) {
+        // ---- editar producto existente: comportamiento sin cambios ----
+        const resultado = await agregarOEditarProducto(datos, codigoOriginal);
+        btnGuardar.disabled = false;
 
-    btnGuardar.disabled = false;
+        if (!resultado.ok) {
+            toast(resultado.msg);
+            return;
+        }
 
-    if (!resultado.ok) {
-        toast(resultado.msg);
-        return;
+        cerrarModal("modalProducto");
+        toast("Producto actualizado");
+    } else {
+        // ---- producto nuevo: código automático y consecutivo (0001, 0002...) ----
+        delete datos.codigo; // lo asigna la transacción, para que nunca se repita entre teléfonos
+
+        try {
+            await crearProductoConCodigoAutomatico(datos);
+            btnGuardar.disabled = false;
+            cerrarModal("modalProducto");
+            toast("Producto agregado");
+        } catch (error) {
+            btnGuardar.disabled = false;
+            console.error(error);
+            toast(error.message || "No se pudo guardar el producto. Revisa tu conexión.");
+        }
     }
-
-    cerrarModal("modalProducto");
-    toast(codigoOriginal ? "Producto actualizado" : "Producto agregado");
 });
 
 /* ================= VENTAS ================= */
@@ -621,7 +707,34 @@ function renderVentaActual() {
 
     const total = carrito.reduce((acc, i) => acc + i.subtotal, 0);
     document.getElementById("carritoTotal").textContent = formatoMoneda(total);
+    document.getElementById("montoACobrar").value = total.toFixed(2);
+    actualizarHintDescuento();
 }
+
+/* ---- monto a cobrar (permite rebaja): muestra la diferencia
+   entre el total calculado y lo que el usuario decide cobrar ---- */
+function actualizarHintDescuento() {
+    const total = carrito.reduce((acc, i) => acc + i.subtotal, 0);
+    const monto = parseFloat(document.getElementById("montoACobrar").value);
+    const hint = document.getElementById("descuentoHint");
+
+    if (isNaN(monto)) {
+        hint.textContent = "";
+        return;
+    }
+
+    const diferencia = Math.round((total - monto) * 100) / 100;
+
+    if (Math.abs(diferencia) < 0.01) {
+        hint.textContent = "";
+    } else if (diferencia > 0) {
+        hint.textContent = `Rebaja aplicada: ${formatoMoneda(diferencia)}`;
+    } else {
+        hint.textContent = `Recargo: ${formatoMoneda(-diferencia)}`;
+    }
+}
+
+document.getElementById("montoACobrar").addEventListener("input", actualizarHintDescuento);
 
 /* ---- modal agregar producto a la venta ---- */
 document.getElementById("btnAgregarAlCarrito").addEventListener("click", () => {
@@ -647,8 +760,9 @@ function renderResultadosVenta(texto) {
     }
 
     cont.innerHTML = lista.map(p => {
-        const miniatura = p.imagenBase64
-            ? `<img src="${p.imagenBase64}" class="product-thumb" alt="Foto de ${escapeHtml(p.nombre)}">`
+        const fotos = p.imagenesBase64 || [];
+        const miniatura = fotos[0]
+            ? `<img src="${fotos[0]}" class="product-thumb" alt="Foto de ${escapeHtml(p.nombre)}">`
             : `<div class="product-thumb-placeholder"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="11" r="2"/><path d="m21 16-5-4-4 3-3-2-6 5"/></svg></div>`;
         return `
     <div class="product-card" data-codigo="${escapeHtml(p.codigo)}">
@@ -670,7 +784,8 @@ function renderResultadosVenta(texto) {
             const miniatura = e.target.closest(".product-thumb");
             if (miniatura) {
                 e.stopPropagation();
-                abrirImagenAmpliada(miniatura.getAttribute("src"));
+                const p = buscarPorCodigo(card.dataset.codigo);
+                abrirImagenAmpliada(p ? p.imagenesBase64 : [], 0);
                 return;
             }
             seleccionarProductoVenta(card.dataset.codigo);
@@ -738,8 +853,11 @@ document.getElementById("btnConfirmarAgregar").addEventListener("click", () => {
    Se ejecuta como una transacción de Firestore: lee el contador y el
    stock, valida, y recién entonces escribe. Así, si dos dispositivos
    confirman una venta al mismo tiempo, nunca se pisan ni repiten
-   número de venta. */
-async function confirmarVentaEnFirestore(itemsCarrito) {
+   número de venta.
+   "montoFinal" es lo que realmente se cobra (puede ser menor al
+   subtotal calculado si hubo una rebaja); si no se especifica o no
+   es un número válido, se usa el subtotal calculado tal cual. */
+async function confirmarVentaEnFirestore(itemsCarrito, montoFinal) {
     return await runTransaction(db, async (transaction) => {
         const refsProductosCarrito = itemsCarrito.map(i => doc(refProductos, i.codigo));
 
@@ -755,11 +873,17 @@ async function confirmarVentaEnFirestore(itemsCarrito) {
         }
 
         const numero = contadorSnap.exists() ? contadorSnap.data().siguiente : 1;
+        const subtotal = itemsCarrito.reduce((acc, i) => acc + i.subtotal, 0);
+        const total = (typeof montoFinal === "number" && !isNaN(montoFinal)) ? montoFinal : subtotal;
+        const descuento = Math.round((subtotal - total) * 100) / 100;
+
         const venta = {
             numero,
             fecha: new Date().toISOString(),
             detalles: itemsCarrito.map(i => ({ ...i })),
-            total: itemsCarrito.reduce((acc, i) => acc + i.subtotal, 0)
+            subtotal,
+            descuento,
+            total
         };
 
         snapsProductos.forEach((snap, idx) => {
@@ -780,11 +904,17 @@ document.getElementById("btnConfirmarVenta").addEventListener("click", async () 
         return;
     }
 
+    const montoFinal = parseFloat(document.getElementById("montoACobrar").value);
+    if (isNaN(montoFinal) || montoFinal < 0) {
+        toast("Revisa el monto a cobrar");
+        return;
+    }
+
     const btn = document.getElementById("btnConfirmarVenta");
     btn.disabled = true;
 
     try {
-        const venta = await confirmarVentaEnFirestore(carrito);
+        const venta = await confirmarVentaEnFirestore(carrito, montoFinal);
         ultimaVentaGenerada = venta;
         mostrarFactura(venta);
         carrito = [];
@@ -821,6 +951,13 @@ function textoFactura(venta) {
         t += "------------------------------------\n";
     });
 
+    if (venta.descuento && Math.abs(venta.descuento) > 0.001) {
+        t += `Subtotal:  ${formatoMoneda(venta.subtotal)}\n`;
+        t += venta.descuento > 0
+            ? `Rebaja:    ${formatoMoneda(venta.descuento)}\n`
+            : `Recargo:   ${formatoMoneda(-venta.descuento)}\n`;
+        t += "------------------------------------\n";
+    }
     t += `TOTAL A PAGAR: ${formatoMoneda(venta.total)}\n`;
     t += "====================================\n";
     t += "Gracias por confiar en nosotros\n";
@@ -886,6 +1023,9 @@ function pintarHistorial() {
         ${v.detalles.map(d => `
           <div class="vd-row"><span>${escapeHtml(d.nombre)} (x${d.cantidad})</span><span>${formatoMoneda(d.subtotal)}</span></div>
         `).join("")}
+        ${(v.descuento && Math.abs(v.descuento) > 0.001) ? `
+          <div class="vd-row"><span>${v.descuento > 0 ? "Rebaja aplicada" : "Recargo"}</span><span>${formatoMoneda(Math.abs(v.descuento))}</span></div>
+        ` : ""}
       </div>
     </div>`).join("");
 
@@ -926,6 +1066,7 @@ function exportarExcel() {
         return {
             "Mes": nombreMes(m),
             "N° de Ventas": vs.length,
+            "Rebajas Aplicadas (Bs)": Number(vs.reduce((a, v) => a + (v.descuento > 0 ? v.descuento : 0), 0).toFixed(2)),
             "Total Vendido (Bs)": Number(vs.reduce((a, v) => a + v.total, 0).toFixed(2))
         };
     });
@@ -947,6 +1088,7 @@ function exportarExcel() {
                     "Cantidad": d.cantidad,
                     "Precio Unitario (Bs)": d.precio,
                     "Subtotal (Bs)": Number(d.subtotal.toFixed(2)),
+                    "Rebaja de la Venta (Bs)": Number((v.descuento > 0 ? v.descuento : 0).toFixed(2)),
                     "Total Venta (Bs)": Number(v.total.toFixed(2))
                 });
             });
