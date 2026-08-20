@@ -6,6 +6,7 @@
 
 import { initializeApp } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-app.js";
 import { getAnalytics } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-analytics.js";
+import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-auth.js";
 import {
     getFirestore,
     collection,
@@ -30,6 +31,7 @@ const firebaseConfig = {
 const firebaseApp = initializeApp(firebaseConfig);
 const analytics = getAnalytics(firebaseApp);
 const db = getFirestore(firebaseApp);
+const auth = getAuth(firebaseApp);
 
 const refProductos = collection(db, "productos");
 const refVentas = collection(db, "ventas");
@@ -250,10 +252,6 @@ document.getElementById("btnFotoSiguiente").addEventListener("click", () => {
 const refContadorProductos = doc(db, "meta", "contadorProductos");
 let siguienteCodigoProductoPreview = 1;
 
-onSnapshot(refContadorProductos, (snap) => {
-    siguienteCodigoProductoPreview = snap.exists() ? snap.data().siguiente : 1;
-}, (error) => console.error("Error leyendo contador de productos:", error));
-
 async function crearProductoConCodigoAutomatico(datos) {
     return await runTransaction(db, async (transaction) => {
         const contadorSnap = await transaction.get(refContadorProductos);
@@ -287,6 +285,29 @@ async function crearProductoConCodigoAutomatico(datos) {
     });
 }
 
+/* ================= AUTENTICACIÓN (NUEVO) =================
+   Firebase avisó que las reglas de "modo de prueba" (abiertas a
+   cualquiera en Internet) vencen a los 30 días del proyecto. Para
+   que la app siga funcionando SIN dejar la base de datos abierta
+   para siempre, cada teléfono inicia una sesión anónima de Firebase
+   de forma automática (sin pedir nada al usuario, la contraseña de
+   la app sigue igual). Las reglas de Firestore deben cambiar a
+   "allow read, write: if request.auth != null;" para que solo
+   quien pasó por esta autenticación pueda entrar. */
+async function iniciarAutenticacion() {
+    try {
+        await signInAnonymously(auth);
+        iniciarSincronizacion();
+    } catch (error) {
+        console.error("Error de autenticación con Firebase:", error);
+        if (error.code === "auth/operation-not-allowed") {
+            toast("Falta activar el inicio de sesión anónimo en Firebase");
+        } else {
+            toast("No se pudo conectar de forma segura. Revisa tu conexión.");
+        }
+    }
+}
+
 /* ================= SINCRONIZACIÓN CON FIRESTORE =================
    Reemplaza el antiguo localStorage. "productos" y "ventas" se
    mantienen actualizados en tiempo real: si otro dispositivo
@@ -313,6 +334,12 @@ function iniciarSincronizacion() {
         actualizarNumeroVentaLabel();
     }, (error) => {
         console.error("Error al sincronizar contador de ventas:", error);
+    });
+
+    onSnapshot(refContadorProductos, (snap) => {
+        siguienteCodigoProductoPreview = snap.exists() ? snap.data().siguiente : 1;
+    }, (error) => {
+        console.error("Error leyendo contador de productos:", error);
     });
 }
 
@@ -572,6 +599,7 @@ function tarjetaProducto(p) {
     </div>
     <div class="product-details">
       <p><b>Compatibilidad:</b> ${escapeHtml(p.compatibilidad || "—")}</p>
+      <p><b>Modelo de auto:</b> ${escapeHtml(p.modeloAuto || "—")}</p>
       <p><b>Cilindrada:</b> ${escapeHtml(p.cilindrada || "—")}</p>
       <p><b>Detalles:</b> ${escapeHtml(p.detalles || "—")}</p>
       <div class="card-actions">
@@ -610,6 +638,7 @@ function abrirFormularioEdicion(codigo) {
     document.getElementById("fMarca").value = p.marca;
     document.getElementById("fCategoria").value = p.categoria;
     document.getElementById("fCompatibilidad").value = p.compatibilidad;
+    document.getElementById("fModeloAuto").value = p.modeloAuto || "";
     document.getElementById("fCilindrada").value = p.cilindrada || "";
     document.getElementById("fDetalles").value = p.detalles || "";
     document.getElementById("fCantidad").value = p.cantidad;
@@ -627,6 +656,7 @@ document.getElementById("formProducto").addEventListener("submit", async (e) => 
         marca: document.getElementById("fMarca").value.trim(),
         categoria: document.getElementById("fCategoria").value.trim(),
         compatibilidad: document.getElementById("fCompatibilidad").value.trim(),
+        modeloAuto: document.getElementById("fModeloAuto").value.trim(),
         cilindrada: document.getElementById("fCilindrada").value.trim(),
         detalles: document.getElementById("fDetalles").value.trim(),
         cantidad: parseInt(document.getElementById("fCantidad").value, 10),
@@ -1187,7 +1217,7 @@ document.getElementById("formLogin").addEventListener("submit", async (e) => {
 });
 
 /* ================= INICIALIZACIÓN ================= */
-iniciarSincronizacion();
+iniciarAutenticacion();
 renderInicio();
 renderInventario();
 renderVentaActual();
